@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #000; margin: 0; padding: 0; }
+  .page { max-width: 750px; margin: 0 auto; padding: 60px 70px; }
+  h1.title { font-size: 20pt; font-weight: bold; text-align: center; margin-bottom: 6px; color: #1a1a2e; }
+  h2.subtitle { font-size: 13pt; font-weight: normal; text-align: center; margin-bottom: 4px; color: #333; }
+  .meta { text-align: center; font-size: 10pt; color: #555; margin-bottom: 40px; }
+  h2.section { font-size: 13pt; font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #1a1a2e; padding-bottom: 4px; margin-top: 36px; margin-bottom: 10px; }
+  h3.sub { font-size: 11pt; font-weight: bold; margin-top: 18px; margin-bottom: 4px; }
+  p { margin: 8px 0; text-align: justify; }
+  ul, ol { margin: 8px 0 8px 24px; }
+  li { margin-bottom: 5px; }
+  .code-block { background: #f4f4f4; border-left: 4px solid #1a1a2e; padding: 10px 16px; font-family: monospace; font-size: 9.5pt; margin: 12px 0; white-space: pre; }
+  .references li { font-size: 10pt; margin-bottom: 10px; }
+  hr { border: none; border-top: 1px solid #ccc; margin: 30px 0; }
+  @page { margin: 2cm 2.2cm; size: A4; }
+  @media print { .page { padding: 0; max-width: 100%; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1 class="title">Generative AI Analysis and Ethics Report</h1>
+<h2 class="subtitle">Recipe Generation Using Fine-Tuned GPT-2</h2>
+<div class="meta">
+  Faheema Mohamed Maideen &nbsp;|&nbsp; Generative AI Capstone Project
+</div>
+
+<hr>
+
+<h2 class="section">1. Overview</h2>
+<p>This report describes the design, implementation, and evaluation of an ingredient-conditioned recipe generation system. The system takes a comma-separated list of cooking ingredients as input and generates a complete recipe, including a title and step-by-step cooking directions. The chosen generative approach is Transformer-based text generation, specifically fine-tuning a pretrained GPT-2 model (Radford et al., 2019) on the RecipeNLG dataset (Bi&#x0119;n et al., 2020). GPT-2 is a decoder-only Transformer architecture that uses autoregressive language modeling to generate coherent multi-sentence text. This task is well-suited to a Transformer-based approach because recipe generation requires domain-specific vocabulary, logical step ordering, and coherent multi-sentence output &#8212; capabilities that benefit from pretrained language understanding rather than training from scratch.</p>
+
+<h2 class="section">2. Dataset or Prompt Description</h2>
+<p>The dataset used in this project is RecipeNLG (Bi&#x0119;n et al., 2020), a large-scale cooking recipe dataset containing 2,231,142 recipes scraped from publicly available cooking websites. Each recipe entry includes a title, a list of raw ingredients with measurements, step-by-step directions, named entity recognition (NER) tags for clean ingredient names, and a source URL. The dataset is publicly available on Kaggle for non-commercial research and educational use, and is not synthetic or AI-generated.</p>
+<p>For this project, recipes were filtered to the &#8220;Gathered&#8221; source category (511,261 recipes) to ensure consistent formatting quality. A random sample of 50,000 recipes was selected for fine-tuning to balance training feasibility with dataset coverage. The NER column was used as the input condition (clean ingredient names without quantities), and the full title and directions were used as the generation target. Each recipe was formatted as a structured string using special tokens:</p>
+<div class="code-block">&lt;|startofrecipe|&gt;
+Ingredients: [NER ingredient list]
+Title: [recipe title]
+Directions: [step-by-step directions]
+&lt;|endofrecipe|&gt;</div>
+<p>Text length analysis confirmed that approximately 98% of recipes fit within 512 tokens, making this the appropriate maximum sequence length for tokenization.</p>
+
+<h2 class="section">3. Model Design and Training Approach</h2>
+<p>The generative model is GPT-2 Small (Radford et al., 2019), a decoder-only Transformer with 124 million parameters pretrained on WebText, a large English text corpus. GPT-2 was selected over training a Transformer from scratch because fine-tuning leverages pretrained language knowledge, which is critical for generating coherent cooking terminology and logical step sequences (Howard &amp; Ruder, 2018).</p>
+<p>The tokenizer was extended with three special tokens: <code>&lt;|pad|&gt;</code>, <code>&lt;|startofrecipe|&gt;</code>, and <code>&lt;|endofrecipe|&gt;</code>, expanding the vocabulary from 50,257 to 50,260 tokens. Token embeddings were resized accordingly.</p>
+<h3 class="sub">Key Design Decisions</h3>
+<ul>
+  <li><strong>Causal language modeling objective:</strong> The model predicts each next token given all previous tokens (cross-entropy loss). Padding positions were masked with -100 to exclude them from the loss computation.</li>
+  <li><strong>AdamW optimizer (lr = 5e-5, weight_decay = 0.01):</strong> The standard optimizer for Transformer fine-tuning. AdamW applies weight decay correctly, decoupled from gradient updates, helping prevent overfitting (Loshchilov &amp; Hutter, 2019).</li>
+  <li><strong>Linear warmup + decay schedule:</strong> 10% warmup steps followed by linear decay, stabilizing early training and preventing large gradient updates before the model has adapted to the recipe domain.</li>
+  <li><strong>Gradient accumulation (4 steps):</strong> Achieves an effective batch size of 16 while keeping per-step memory usage low (physical batch size = 4).</li>
+  <li><strong>Gradient clipping (max_norm = 1.0):</strong> Prevents exploding gradients during fine-tuning.</li>
+  <li><strong>Mixed precision (torch.autocast, float16):</strong> Used on CUDA to reduce memory usage and speed up training.</li>
+  <li><strong>Early stopping (patience = 3):</strong> Monitors validation loss and restores the best checkpoint.</li>
+</ul>
+<p>Training ran for 2 epochs on 45,000 recipes (90/10 train/val split), with the best model checkpoint saved based on validation loss. Final training loss: 1.9284 (perplexity: 6.88). Final validation loss: 1.7745 (perplexity: 5.90). The lower validation loss relative to training loss indicates stable generalization without overfitting.</p>
+<p>Text generation used top-p nucleus sampling (p = 0.9), top-k sampling (k = 50), temperature = 0.8, and no-repeat-ngram-size = 3 to balance output diversity and coherence (Holtzman et al., 2020).</p>
+
+<h2 class="section">4. Output Evaluation and Interpretation</h2>
+<p>Twenty recipes were generated using diverse ingredient sets to evaluate model performance across different cuisine types and complexity levels.</p>
+<h3 class="sub">Strengths</h3>
+<p>The model consistently produced well-structured outputs following the trained format. In most cases, the generated title was relevant to the input ingredients. For example, given &#8220;cream cheese, sugar, vanilla, graham cracker, eggs,&#8221; the model generated &#8220;Grandma&#8217;s Cream Cheese Cake&#8221; with a logical baking sequence. Given &#8220;rice, black beans, corn, salsa, cheese,&#8221; the model generated &#8220;Mexican Rice&#8221; with multi-step directions that correctly used the provided ingredients. Quantitatively, the validation perplexity of 5.90 indicates the model assigns high probability to coherent recipe text, reflecting meaningful adaptation to the domain.</p>
+<h3 class="sub">Failure Cases</h3>
+<p>Several systematic failure patterns were observed:</p>
+<ol>
+  <li><strong>Vague or incomplete directions:</strong> Given &#8220;beef, onion, potato, carrot, broth,&#8221; the model generated &#8220;Beef Stew&#8221; with only a single vague step &#8212; &#8220;Mix all ingredients together and bake in oven&#8221; &#8212; ignoring the broth entirely. This reflects the model&#8217;s tendency to collapse complex dishes to the nearest high-frequency training pattern.</li>
+  <li><strong>Hallucinated steps:</strong> Recipe #6 (shrimp, garlic, butter, lemon, parsley) included the step &#8220;simmer until parsley melts,&#8221; which is culinarily nonsensical. Recipe #2 (chocolate cake) instructed the user to &#8220;pour in 1 cup cold water&#8221; mid-bake &#8212; a step not grounded in the input or realistic baking practice.</li>
+  <li><strong>Ingredient count hallucination:</strong> Recipe #7 (banana, peanut butter, oats, honey &#8212; 4 ingredients) referenced &#8220;Mix first 5 ingredients,&#8221; hallucinating a fifth ingredient that was not provided.</li>
+  <li><strong>Thematic mismatch:</strong> Given &#8220;sweet potato, black bean, cumin, lime, cilantro,&#8221; the model generated &#8220;Hot Vegetable Soup&#8221; rather than a more contextually appropriate dish such as a burrito bowl or taco filling.</li>
+</ol>
+<p>These failure modes are consistent with documented limitations of autoregressive language models fine-tuned on limited data (Holtzman et al., 2020).</p>
+
+<h2 class="section">5. Ethical Considerations and Responsible Use</h2>
+<h3 class="sub">Bias in Training Data</h3>
+<p>The RecipeNLG dataset was scraped predominantly from English-language Western cooking websites. As a result, the model demonstrates a strong bias toward American and European recipe styles and cooking methods (e.g., oven baking at 350&#176;F appears in nearly every generated recipe, regardless of cuisine type). Ingredient combinations associated with East Asian, South Asian, or Latin American cuisines produced outputs that either mapped to generic Western formats or generated thematically mismatched titles. For example, &#8220;tofu, broccoli, soy sauce, sesame oil, rice&#8221; generated a recipe that ended with &#8220;Bake at 350&#176; for 1 hour&#8221; &#8212; a method inconsistent with typical stir-fry preparation. This reflects a systemic bias in the training corpus that could lead users from underrepresented culinary traditions to receive inaccurate or culturally inappropriate recipe guidance.</p>
+<h3 class="sub">Creative Ownership</h3>
+<p>The model generates text that is statistically derived from millions of scraped recipes created by human cooks and food writers. The generated recipes are not attributed to any source, raising questions about intellectual property and the uncredited use of human creative work as training data (Bender et al., 2021). Users or developers deploying such a system commercially should consider data provenance, licensing, and compensation for original content creators.</p>
+<h3 class="sub">Misuse Potential</h3>
+<p>While a recipe generator poses limited direct harm, the same fine-tuning methodology applied to sensitive domains (medical instructions, legal advice, financial guidance) could produce plausible-sounding but incorrect outputs that users may trust inappropriately. This project illustrates the general risk of small fine-tuned language models generating confidently-stated but factually incorrect content &#8212; a form of hallucination that extends beyond recipe generation.</p>
+
+<h2 class="section">6. Limitations and Future Improvements</h2>
+<h3 class="sub">Limitations</h3>
+<ul>
+  <li>Training on 50,000 recipes (2.2% of the full dataset) limits the model&#8217;s exposure to diverse recipe patterns, contributing to repetitive outputs and over-reliance on common structures.</li>
+  <li>GPT-2 Small (124M parameters) has limited capacity compared to modern large language models, restricting its ability to generate nuanced multi-step directions.</li>
+  <li>The model does not verify ingredient consistency: it may generate directions using ingredients not in the input list, or omit provided ingredients entirely.</li>
+  <li>No quantitative evaluation metric beyond perplexity was applied; metrics such as BLEU or ingredient coverage rate would provide more targeted quality measurement.</li>
+  <li>The dataset&#8217;s Western bias limits usefulness for global culinary applications.</li>
+</ul>
+<h3 class="sub">Future Improvements</h3>
+<ul>
+  <li>Fine-tune on the full 2.2M-recipe dataset to improve coverage and reduce repetition.</li>
+  <li>Use GPT-2 Medium or Large (345M&#8211;774M parameters) to improve output coherence.</li>
+  <li>Add an ingredient coverage scoring step that checks whether all input ingredients appear in the generated output.</li>
+  <li>Introduce cuisine-type conditioning (e.g., &#8220;Cuisine: Italian&#8221;) to improve thematic alignment.</li>
+  <li>Evaluate outputs using BLEU scores against held-out reference recipes and human evaluation rubrics.</li>
+</ul>
+
+<h2 class="section">7. References</h2>
+<ul class="references">
+  <li>Bi&#x0119;n, M., Gilski, M., Maciejewska, M., Taisner, W., Wisniewski, D., &amp; Lawrynowicz, A. (2020). RecipeNLG: A cooking recipes dataset for semi-structured text generation. In <em>Proceedings of the 13th International Conference on Natural Language Generation (INLG)</em>, 22&#8211;28. Association for Computational Linguistics.</li>
+  <li>Bender, E. M., Gebru, T., McMillan-Major, A., &amp; Shmitchell, S. (2021). On the dangers of stochastic parrots: Can language models be too big? In <em>Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency (FAccT)</em>, 610&#8211;623. https://doi.org/10.1145/3442188.3445922</li>
+  <li>Holtzman, A., Buys, J., Du, L., Forbes, M., &amp; Choi, Y. (2020). The curious case of neural text degeneration. In <em>Proceedings of the International Conference on Learning Representations (ICLR)</em>. https://arxiv.org/abs/1904.09751</li>
+  <li>Howard, J., &amp; Ruder, S. (2018). Universal language model fine-tuning for text classification. In <em>Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (ACL)</em>, 328&#8211;339. https://doi.org/10.18653/v1/P18-1031</li>
+  <li>Loshchilov, I., &amp; Hutter, F. (2019). Decoupled weight decay regularization. In <em>Proceedings of the International Conference on Learning Representations (ICLR)</em>. https://arxiv.org/abs/1711.05101</li>
+  <li>Radford, A., Wu, J., Child, R., Luan, D., Amodei, D., &amp; Sutskever, I. (2019). Language models are unsupervised multitask learners. <em>OpenAI Blog, 1</em>(8), 9. https://openai.com/research/language-unsupervised</li>
+</ul>
+
+</div>
+</body>
+</html>
